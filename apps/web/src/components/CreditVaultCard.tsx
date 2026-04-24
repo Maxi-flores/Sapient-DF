@@ -5,7 +5,8 @@
  *
  * A "Credit Vault" card component with:
  *   • IP geolocation powered by ipapi.co (rendered in Crystal-Clear mono font)
- *   • A QR code that encodes configurable payment details
+ *   • A QR code that encodes configurable payment details (responsive, aspect-square)
+ *   • Copy-to-clipboard on the IP address with a "Coordinates Copied" stardust tooltip
  *   • A Claude-style aesthetic: #00F0FF accents, blurred-glass background
  *
  * Usage:
@@ -15,7 +16,7 @@
  *   />
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 
 // ---------------------------------------------------------------------------
@@ -74,9 +75,16 @@ function useIpLocation() {
       } catch (err) {
         clearTimeout(timeoutId);
         if (!cancelled) {
-          const message =
-            err instanceof Error ? err.message : "Unknown error";
-          setError(message === "signal timed out" ? "Request timed out" : message);
+          // Check for AbortError (both DOMException name and message variants)
+          const isAbort =
+            (err instanceof Error && err.name === "AbortError") ||
+            (err instanceof Error && err.message === "signal timed out");
+          const message = isAbort
+            ? "Request timed out"
+            : err instanceof Error
+            ? err.message
+            : "Unknown error";
+          setError(message);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -117,7 +125,8 @@ export function CreditVaultCard({
         {error && <p style={{ ...styles.mono, color: "#ff4d4d" }}>⚠ {error}</p>}
         {location && (
           <div style={styles.locationGrid}>
-            <LocationRow label="IP" value={location.ip} />
+            {/* IP row — clickable copy with stardust tooltip */}
+            <CopyableRow label="IP" value={location.ip} />
             <LocationRow
               label="CITY"
               value={`${location.city}, ${location.region}`}
@@ -138,10 +147,15 @@ export function CreditVaultCard({
       {/* ── QR Code ───────────────────────────────────────────────────── */}
       <section style={styles.qrSection}>
         <p style={styles.sectionLabel}>PAYMENT DETAILS</p>
-        <div style={styles.qrWrapper}>
+        {/*
+          aspect-square + w-full makes the QR tile perfectly square and
+          responsive on all screen sizes; max-w-[200px] caps the desktop size.
+        */}
+        <div className="w-full max-w-[200px] mx-auto aspect-square" style={styles.qrWrapper}>
           <QRCodeSVG
             value={paymentDetails}
-            size={160}
+            size={undefined}
+            style={{ width: "100%", height: "100%", display: "block" }}
             bgColor="transparent"
             fgColor="#00F0FF"
             level="H"
@@ -171,6 +185,65 @@ function LocationRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+/**
+ * CopyableRow — clicking the value copies it to clipboard and shows a
+ * temporary tooltip with a stardust glow animation.
+ * Shows "Copied!" on success, or a warning if clipboard API is unavailable.
+ */
+function CopyableRow({ label, value }: { label: string; value: string }) {
+  const [tooltipState, setTooltipState] = useState<"hidden" | "in" | "out">("hidden");
+  const [tooltipMsg, setTooltipMsg] = useState("✦ Copied!");
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function showTooltip(message: string) {
+    setTooltipMsg(message);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    setTooltipState("in");
+    timerRef.current = setTimeout(() => {
+      setTooltipState("out");
+      timerRef.current = setTimeout(() => setTooltipState("hidden"), 280);
+    }, 1_800);
+  }
+
+  function handleCopy() {
+    if (!navigator.clipboard) {
+      // Clipboard API requires HTTPS / secure context
+      showTooltip("⚠ HTTPS required");
+      return;
+    }
+    navigator.clipboard
+      .writeText(value)
+      .then(() => showTooltip(`✦ ${label} Copied`))
+      .catch(() => showTooltip("⚠ Copy failed"));
+  }
+
+  return (
+    <div style={{ ...styles.locationRow, position: "relative" }}>
+      <span style={styles.locationLabel}>{label}</span>
+      <button
+        type="button"
+        onClick={handleCopy}
+        title="Copy to clipboard"
+        style={styles.copyButton}
+      >
+        {value}
+      </button>
+
+      {/* Stardust tooltip */}
+      {tooltipState !== "hidden" && (
+        <span
+          className={
+            tooltipState === "in" ? "animate-stardust-in" : "animate-stardust-out"
+          }
+          style={styles.tooltip}
+        >
+          {tooltipMsg}
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Styles  (Claude-style: dark glass, #00F0FF accents, monospace)
 // ---------------------------------------------------------------------------
@@ -182,7 +255,7 @@ const FONT_MONO =
 const styles: Record<string, React.CSSProperties> = {
   card: {
     position: "relative",
-    width: 360,
+    width: "min(360px, 100%)",
     borderRadius: 16,
     padding: "28px 24px",
     background: "rgba(10, 14, 26, 0.72)",
@@ -244,6 +317,35 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#c8d8f8",
     textAlign: "right" as const,
     wordBreak: "break-all" as const,
+  },
+  copyButton: {
+    background: "none",
+    border: "none",
+    padding: 0,
+    cursor: "pointer",
+    fontSize: 11,
+    color: "#c8d8f8",
+    fontFamily: FONT_MONO,
+    textAlign: "right" as const,
+    wordBreak: "break-all" as const,
+    textDecoration: "underline dotted rgba(0,240,255,0.35)",
+    transition: "color 0.15s",
+  },
+  tooltip: {
+    position: "absolute" as const,
+    bottom: "calc(100% + 6px)",
+    left: "50%",
+    transform: "translateX(-50%)",
+    whiteSpace: "nowrap" as const,
+    background: "rgba(10, 14, 26, 0.92)",
+    border: `1px solid rgba(${hexToRgb(ACCENT)}, 0.5)`,
+    borderRadius: 6,
+    padding: "4px 10px",
+    fontSize: 10,
+    letterSpacing: "0.12em",
+    color: ACCENT,
+    pointerEvents: "none" as const,
+    zIndex: 10,
   },
   mono: {
     margin: 0,

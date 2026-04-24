@@ -1,0 +1,166 @@
+# .github/workflows/deploy.yml
+#
+# Sapient monorepo — CI/CD pipeline
+#
+# Runs on every push to main and on pull requests.
+# Steps:
+#   1. Check out code
+#   2. Verify next@15.5.15 security patch is in place
+#   3. Run the vault symlink script
+#   4. Install dependencies
+#   5. Lint + type-check
+#   6. Build the Next.js app
+#   7. Deploy to Vercel (main branch only)
+
+name: CI / Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_VERSION: "20"
+  REQUIRED_NEXT_VERSION: "15.5.15"
+
+jobs:
+  # ── build ──────────────────────────────────────────────────────────────────
+  build:
+    name: Lint, type-check & build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read  # minimum required to check out the repository
+
+    steps:
+      # 1. Checkout
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Set up Node.js
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      # 3. Verify next security patch version
+      #    Fails the build if next is not exactly the required version or higher.
+      - name: Verify next@${{ env.REQUIRED_NEXT_VERSION }} security patch
+        run: |
+          INSTALLED=$(node -e "
+            const pkg = require('./apps/web/package.json');
+            const ver = pkg.dependencies.next.replace(/[\^~>=<]/g,'');
+            console.log(ver);
+          ")
+          echo "Declared next version in package.json: $INSTALLED"
+
+          # Use node semver comparison to ensure version >= required
+          node -e "
+            const [a,b] = ['$INSTALLED', '${{ env.REQUIRED_NEXT_VERSION }}'].map(v =>
+              v.split('.').map(Number));
+            for (let i = 0; i < 3; i++) {
+              if (a[i] > b[i]) process.exit(0);
+              if (a[i] < b[i]) {
+                console.error('next version ' + '$INSTALLED' + ' is below required ${{ env.REQUIRED_NEXT_VERSION }}');
+                process.exit(1);
+              }
+            }
+            process.exit(0);
+          "
+          echo "✅ next version is $INSTALLED (>= ${{ env.REQUIRED_NEXT_VERSION }})"
+
+      # 4. Create the vault → apps/web/content symlink
+      - name: Create vault symlink
+        run: bash scripts/create-vault-symlink.sh
+
+      # 5. Install dependencies (workspace root installs all workspaces)
+      # --legacy-peer-deps is required because lottie-react has a peer dep on
+      # react@18 while newer react versions are compatible; remove once resolved.
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      # 6. Lint
+      - name: Lint
+        working-directory: apps/web
+        run: npm run lint
+
+      # 7. Type-check
+      - name: Type-check
+        working-directory: apps/web
+        run: npx tsc --noEmit
+
+      # 8. Build
+      - name: Build Next.js app
+        working-directory: apps/web
+        run: npm run build
+
+      # 9. Upload build artefact for the deploy job
+      - name: Upload .next build artefact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextjs-build
+          path: |
+            apps/web/.next
+            apps/web/public
+          retention-days: 1
+
+  # ── deploy ─────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to Vercel
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read  # minimum required to check out the repository
+
+    steps:
+      # 1. Checkout (Vercel CLI needs the project source)
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Create vault symlink (required by outputFileTracingIncludes)
+      - name: Create vault symlink
+        run: bash scripts/create-vault-symlink.sh
+
+      # 3. Set up Node.js
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      # 4. Install dependencies
+      # --legacy-peer-deps: see note in build job above.
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      # 5. Install Vercel CLI
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+
+      # 6. Pull Vercel environment & project config
+      - name: Pull Vercel environment
+        working-directory: apps/web
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      # 7. Build via Vercel (respects vercel.json / framework detection)
+      - name: Build with Vercel
+        working-directory: apps/web
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          NEXT_PUBLIC_WHATSAPP_NUMBER: ${{ secrets.NEXT_PUBLIC_WHATSAPP_NUMBER }}
+
+      # 8. Deploy prebuilt artefact to Vercel
+      - name: Deploy to Vercel
+        working-directory: apps/web
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}

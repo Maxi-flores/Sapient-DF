@@ -1,0 +1,61 @@
+/* Tailwind CSS v4 */
+@import "tailwindcss";
+
+/* Claude-style global reset & dark theme */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  background: #07090f;
+  color: #e8f0fe;
+  font-family: "JetBrains Mono", "Fira Code", "Courier New", monospace;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Stardust tooltip glow animation ───────────────────────────────────── */
+@keyframes stardust-in {
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) translateY(4px) scale(0.92);
+    filter: blur(4px);
+    box-shadow: 0 0 0 rgba(0, 240, 255, 0);
+  }
+  60% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(-2px) scale(1.03);
+    filter: blur(0);
+    box-shadow: 0 0 18px rgba(0, 240, 255, 0.55);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
+    filter: blur(0);
+    box-shadow: 0 0 10px rgba(0, 240, 255, 0.35);
+  }
+}
+
+@keyframes stardust-out {
+  from {
+    opacity: 1;
+    filter: blur(0);
+  }
+  to {
+    opacity: 0;
+    filter: blur(3px);
+  }
+}
+
+.animate-stardust-in {
+  animation: stardust-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.animate-stardust-out {
+  animation: stardust-out 0.25s ease-in forwards;
+}
